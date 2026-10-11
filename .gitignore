@@ -1,0 +1,33 @@
+# Virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment variables and secrets
+.env
+.env.*
+
+# Data files
+data/raw/*
+data/processed/*
+data/splits/*
+
+# Trained models
+models/*
+!models/.gitkeep
+
+# Generated reports
+reports/figures/*
+reports/metrics/*
+
+# macOS
+.DS_Store
+
+# IDE settings
+.vscode/
