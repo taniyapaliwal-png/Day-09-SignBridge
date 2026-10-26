@@ -1,83 +1,157 @@
-"""Validate SignBridge landmark CSV files."""
 
-from __future__ import annotations
-
+import argparse
 import csv
 import math
+import sys
+from collections import Counter
 from pathlib import Path
 
-FEATURE_COUNT = 126
-DATA_DIRECTORY = Path("data/raw")
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CSV = PROJECT_ROOT / "data" / "landmarks.csv"
 
-def validate_file(path: Path) -> tuple[str, int]:
-    label = path.stem
+LANDMARK_COUNT = 21
+COORDINATES = ("x", "y", "z")
+SIDES = ("left", "right")
 
-    with path.open(newline="") as file:
-        reader = csv.DictReader(file)
-        fieldnames = reader.fieldnames or []
-
-    expected_fields = [
-        f"feature_{index}"
-        for index in range(FEATURE_COUNT)
+EXPECTED_FIELDS = (
+    ["label", "left_present", "right_present"]
+    + [
+        f"{side}_{i}_{coordinate}"
+        for side in SIDES
+        for i in range(LANDMARK_COUNT)
+        for coordinate in COORDINATES
     ]
+)
 
-    if fieldnames != expected_fields:
-        raise ValueError(
-            f"{path}: expected {FEATURE_COUNT} feature columns, "
-            f"found {len(fieldnames)}"
-        )
 
-    sample_count = 0
+def validate_row(row):
+    errors = []
 
-    for row_number, row in enumerate(reader, start=2):
-        for field in expected_fields:
-            value = row.get(field, "")
+    label = (row.get("label") or "").strip()
+    if not label:
+        errors.append("missing label")
 
-            if value == "":
-                raise ValueError(
-                    f"{path}, row {row_number}: missing {field}"
+    presence = {}
+
+    for side in SIDES:
+        value = row.get(f"{side}_present", "")
+
+        if value not in ("0", "1"):
+            errors.append(f"invalid {side}_present flag")
+        else:
+            presence[side] = int(value)
+
+    if len(presence) == 2 and not any(presence.values()):
+        errors.append("no hand marked as present")
+
+    for side in SIDES:
+        for i in range(LANDMARK_COUNT):
+            for coordinate in COORDINATES:
+                field = f"{side}_{i}_{coordinate}"
+                raw_value = row.get(field, "")
+
+                try:
+                    value = float(raw_value)
+                except (TypeError, ValueError):
+                    errors.append(f"{field} is not numeric")
+                    continue
+
+                if not math.isfinite(value):
+                    errors.append(f"{field} is not finite")
+                    continue
+
+                # MediaPipe x and y are normalized image coordinates.
+                # Small tolerance accommodates floating-point rounding.
+                if (
+                    coordinate in ("x", "y")
+                    and presence.get(side) == 1
+                    and not -0.001 <= value <= 1.001
+                ):
+                    errors.append(f"{field} is outside the image")
+
+    return errors
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Validate a SignBridge landmark CSV dataset."
+    )
+    parser.add_argument(
+        "--csv",
+        type=Path,
+        default=DEFAULT_CSV,
+        help="Path to the landmark CSV file.",
+    )
+    args = parser.parse_args()
+
+    csv_path = args.csv
+
+    if not csv_path.is_file():
+        print(f"ERROR: Dataset not found: {csv_path}")
+        return 1
+
+    valid_count = 0
+    invalid_count = 0
+    label_counts = Counter()
+
+    try:
+        with csv_path.open("r", newline="", encoding="utf-8-sig") as file:
+            reader = csv.DictReader(file)
+
+            if reader.fieldnames != EXPECTED_FIELDS:
+                print("ERROR: CSV header does not match the expected schema.")
+                print(f"Expected {len(EXPECTED_FIELDS)} columns.")
+                print(
+                    f"Found {len(reader.fieldnames or [])} columns."
                 )
+                return 1
 
-            number = float(value)
+            for line_number, row in enumerate(reader, start=2):
+                errors = validate_row(row)
 
-            if not math.isfinite(number):
-                raise ValueError(
-                    f"{path}, row {row_number}: invalid {field}"
-                )
+                if errors:
+                    invalid_count += 1
+                    print(
+                        f"Row {line_number}: "
+                        + "; ".join(errors[:5])
+                    )
+                    if len(errors) > 5:
+                        print(f"  ... and {len(errors) - 5} more issue(s)")
+                else:
+                    valid_count += 1
+                    label_counts[row["label"].strip()] += 1
 
-        sample_count += 1
+    except (OSError, UnicodeError, csv.Error) as error:
+        print(f"ERROR: Could not read dataset: {error}")
+        return 1
 
-    return label, sample_count
+    total = valid_count + invalid_count
 
+    print("\n--- SignBridge Dataset Report ---")
+    print(f"File: {csv_path}")
+    print(f"Total samples: {total}")
+    print(f"Valid samples: {valid_count}")
+    print(f"Invalid samples: {invalid_count}")
+    print(f"Unique labels in valid samples: {len(label_counts)}")
 
-def main() -> None:
-    files = sorted(DATA_DIRECTORY.glob("*.csv"))
+    if label_counts:
+        print("\nSamples per label:")
+        for label, count in sorted(label_counts.items()):
+            print(f"  {label}: {count}")
 
-    if not files:
-        raise FileNotFoundError(
-            f"No CSV files found in {DATA_DIRECTORY}"
-        )
+    if total == 0:
+        print("\nWARNING: Dataset is empty.")
+        return 1
 
-    total_samples = 0
-    labels: list[str] = []
+    if invalid_count:
+        print("\nRESULT: Validation failed. Review the reported rows.")
+        return 1
 
-    for path in files:
-        label, sample_count = validate_file(path)
-        labels.append(label)
-        total_samples += sample_count
-        print(f"PASS  {path}: {sample_count} samples")
-
-    print()
-    print(f"Labels: {len(labels)}")
-    print(f"Total samples: {total_samples}")
-
-    if len(labels) < 2:
-        print("WARNING: Add at least one more label before training.")
-
-    if total_samples < 20:
-        print("WARNING: Dataset is currently too small for training.")
+    print("\nRESULT: All samples passed structural validation.")
+    print("Note: This does not verify that sign labels are correct.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
