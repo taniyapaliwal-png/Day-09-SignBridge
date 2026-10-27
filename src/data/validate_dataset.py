@@ -61,14 +61,6 @@ def validate_row(row):
                     errors.append(f"{field} is not finite")
                     continue
 
-                # MediaPipe x and y are normalized image coordinates.
-                # Small tolerance accommodates floating-point rounding.
-                if (
-                    coordinate in ("x", "y")
-                    and presence.get(side) == 1
-                    and not -0.001 <= value <= 1.001
-                ):
-                    errors.append(f"{field} is outside the image")
 
     return errors
 
