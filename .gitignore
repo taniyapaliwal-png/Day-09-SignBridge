@@ -31,3 +31,9 @@ reports/metrics/*
 
 # IDE settings
 .vscode/
+
+# Private landmark dataset
+data/landmarks.csv
+
+# Locally trained model
+models/*.joblib
